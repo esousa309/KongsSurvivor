@@ -1,198 +1,257 @@
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class EnemySpawner : MonoBehaviour
 {
-    [Header("Prefabs & References")]
-    public Enemy enemyPrefab;
-    public Enemy bossPrefab;
-    public Transform player;
-
-    [Header("Pickups")]
-    public GameObject xpOrbPrefab;
-
     [Header("Spawn Settings")]
+    public GameObject enemyPrefab;
+    public GameObject bossPrefab;
+    public Transform player;
+    public GameObject xpOrbPrefab;
+    
+    [Header("Spawn Configuration")]
     public float spawnInterval = 1.5f;
     public int maxEnemies = 80;
     public float spawnRadius = 12f;
-
-    // Difficulty context (set by GameManager)
-    int planetIndex = 0;
-    int subLevel = 1;
-
-    // Internal
-    float timer;
-    public bool SpawnedAnyThisLevel { get; private set; }
-
-    public int LiveEnemies
+    public float minSpawnDistance = 5f;
+    
+    [Header("Runtime")]
+    private bool isSpawning = false;
+    private List<GameObject> activeEnemies = new List<GameObject>();
+    private Coroutine spawnCoroutine;
+    
+    void Start()
     {
-        get
+        // Find player if not assigned
+        if (player == null)
         {
-            // Fast enough for debugging scale
-            return FindObjectsOfType<Enemy>().Length;
-        }
-    }
-
-    void OnEnable()
-    {
-        timer = 0f;
-        SpawnedAnyThisLevel = false;
-        TryAutoAssignPlayer();
-    }
-
-    void Update()
-    {
-        if (!IsReady(out string whyNot))
-        {
-            return;
-        }
-
-        if (LiveEnemies >= maxEnemies) return;
-
-        timer += Time.deltaTime;
-        if (timer >= spawnInterval)
-        {
-            if (!SpawnEnemy(false))
+            GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
+            if (playerObj != null)
             {
-                Debug.LogWarning("[EnemySpawner] SpawnEnemy(false) failed. Check prefabs and Player reference.");
-            }
-            timer = 0f;
-        }
-    }
-
-    public void SetDifficulty(int planetIdx, int subLvl, bool isBossLevel)
-    {
-        planetIndex = planetIdx;
-        subLevel = subLvl;
-        spawnInterval = Mathf.Clamp(1.8f - 0.06f * (subLevel - 1) - 0.05f * planetIndex, 0.35f, 2f);
-        maxEnemies = Mathf.Clamp(40 + 4 * (subLevel - 1) + 8 * planetIndex, 20, 200);
-
-        if (isBossLevel)
-        {
-            spawnInterval *= 2.5f;
-            maxEnemies = Mathf.Max(15, maxEnemies / 3);
-        }
-    }
-
-    public void ResetForLevelStart(int initialBurstCount)
-    {
-        timer = 0f;
-        SpawnedAnyThisLevel = false;
-        if (!IsReady(out string whyNot))
-        {
-            Debug.LogWarning("[EnemySpawner] Not ready at level start: " + whyNot);
-            return;
-        }
-
-        for (int i = 0; i < initialBurstCount; i++)
-        {
-            bool ok = SpawnEnemy(false);
-            if (!ok)
-            {
-                Debug.LogWarning($"[EnemySpawner] Initial burst spawn #{i+1} failed.");
-                break;
+                player = playerObj.transform;
             }
         }
+        
+        // Clean up list
+        activeEnemies.Clear();
     }
-
-    public void SpawnBossNow()
+    
+    public void StartSpawning()
     {
-        if (!SpawnEnemy(true))
+        if (!isSpawning)
         {
-            Debug.LogWarning("[EnemySpawner] SpawnBossNow failed. Check bossPrefab and Player reference.");
+            isSpawning = true;
+            spawnCoroutine = StartCoroutine(SpawnLoop());
         }
     }
-
-    /// <summary>
-    /// Forces a single regular enemy spawn at current player position + radius.
-    /// Useful for debugging.
-    /// </summary>
-    public bool ForceSpawnOne()
+    
+    public void StopSpawning()
     {
-        if (!IsReady(out string whyNot))
+        isSpawning = false;
+        
+        if (spawnCoroutine != null)
         {
-            Debug.LogWarning("[EnemySpawner] ForceSpawnOne blocked: " + whyNot);
-            return false;
+            StopCoroutine(spawnCoroutine);
+            spawnCoroutine = null;
         }
-        return SpawnEnemy(false);
     }
-
-    /// <summary>
-    /// Forces a boss spawn for debugging.
-    /// </summary>
-    public bool ForceSpawnBoss()
+    
+    IEnumerator SpawnLoop()
     {
-        if (!IsReady(out string whyNot))
+        while (isSpawning)
         {
-            Debug.LogWarning("[EnemySpawner] ForceSpawnBoss blocked: " + whyNot);
-            return false;
+            if (activeEnemies.Count < maxEnemies)
+            {
+                SpawnEnemy();
+            }
+            
+            yield return new WaitForSeconds(spawnInterval);
         }
-        return SpawnEnemy(true);
     }
-
-    bool SpawnEnemy(bool boss)
+    
+    public void SpawnEnemy()
     {
-        var prefab = boss ? bossPrefab : enemyPrefab;
-        if (prefab == null) { return false; }
-        if (player == null) { TryAutoAssignPlayer(); if (player == null) return false; }
-
-        Vector2 offset = Random.insideUnitCircle.normalized * Mathf.Max(1f, spawnRadius);
-        Vector2 pos = (Vector2)player.position + offset;
-
-        var e = Instantiate(prefab, pos, Quaternion.identity);
-        if (e == null) return false;
-
-        // Safety: ensure base components exist
-        var h = e.GetComponent<Health>();
-        if (h == null) h = e.gameObject.AddComponent<Health>();
-        if (e.GetComponent<Rigidbody2D>() == null)
+        if (enemyPrefab == null || player == null) return;
+        
+        Vector3 spawnPosition = GetSpawnPosition();
+        GameObject enemy = Instantiate(enemyPrefab, spawnPosition, Quaternion.identity);
+        
+        // Set enemy target
+        Enemy enemyScript = enemy.GetComponent<Enemy>();
+        if (enemyScript != null)
         {
-            var rb = e.gameObject.AddComponent<Rigidbody2D>();
-            rb.gravityScale = 0;
+            enemyScript.SetTarget(player);
         }
-        if (e.GetComponent<Collider2D>() == null)
+        
+        // Track enemy
+        activeEnemies.Add(enemy);
+        
+        // Setup enemy death handling
+        Health enemyHealth = enemy.GetComponent<Health>();
+        if (enemyHealth != null)
         {
-            e.gameObject.AddComponent<CircleCollider2D>();
+            enemyHealth.OnDeath += () => HandleEnemyDeath(enemy);
         }
-
-        // Scale difficulty
-        float hpMult = 1f + 0.25f * planetIndex + 0.15f * (subLevel - 1);
-        if (boss) hpMult *= 12f;
-        if (h != null)
-        {
-            h.maxHealth = Mathf.Max(1f, h.maxHealth * hpMult);
-            h.current = h.maxHealth;
-        }
-
-        e.moveSpeed *= 1f + 0.02f * (subLevel - 1) + 0.01f * planetIndex;
-        e.xpAmount = boss ? Mathf.Max(1, 15 + 3 * planetIndex) : Mathf.Max(1, 1 + subLevel / 5);
-
-        // Ensure XP drop
-        if (e.xpOrbPrefab == null && xpOrbPrefab != null) e.xpOrbPrefab = xpOrbPrefab;
-
-        SpawnedAnyThisLevel = true;
-        return true;
     }
-
-    bool IsReady(out string reason)
+    
+    public void SpawnBoss()
     {
-        if (enemyPrefab == null) { reason = "Enemy Prefab missing"; return false; }
-        if (player == null) { reason = "Player not assigned"; return false; }
-        reason = null;
-        return true;
+        if (bossPrefab == null || player == null) return;
+        
+        Vector3 spawnPosition = GetSpawnPosition();
+        GameObject boss = Instantiate(bossPrefab, spawnPosition, Quaternion.identity);
+        
+        // Set boss target
+        Enemy bossScript = boss.GetComponent<Enemy>();
+        if (bossScript != null)
+        {
+            bossScript.SetTarget(player);
+            bossScript.isBoss = true;
+        }
+        
+        // Track boss
+        activeEnemies.Add(boss);
+        
+        // Setup boss death handling
+        Health bossHealth = boss.GetComponent<Health>();
+        if (bossHealth != null)
+        {
+            bossHealth.OnDeath += () => HandleEnemyDeath(boss);
+        }
     }
-
-    void TryAutoAssignPlayer()
+    
+    Vector3 GetSpawnPosition()
     {
         if (player == null)
         {
-            var p = GameObject.FindGameObjectWithTag("Player");
-            if (p != null) player = p.transform;
+            return transform.position + Random.insideUnitSphere * spawnRadius;
+        }
+        
+        Vector3 spawnPos;
+        int attempts = 0;
+        
+        do
+        {
+            // Get random angle
+            float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+            
+            // Get random distance between min and max
+            float distance = Random.Range(minSpawnDistance, spawnRadius);
+            
+            // Calculate position
+            spawnPos = player.position + new Vector3(
+                Mathf.Cos(angle) * distance,
+                Mathf.Sin(angle) * distance,
+                0f
+            );
+            
+            attempts++;
+        }
+        while (Vector3.Distance(spawnPos, player.position) < minSpawnDistance && attempts < 10);
+        
+        return spawnPos;
+    }
+    
+    void HandleEnemyDeath(GameObject enemy)
+    {
+        if (enemy == null) return;
+        
+        // Remove from active list
+        activeEnemies.Remove(enemy);
+        
+        // Spawn XP orb
+        if (xpOrbPrefab != null)
+        {
+            SpawnXPOrb(enemy.transform.position);
+        }
+        
+        // Check if this was a boss
+        Enemy enemyScript = enemy.GetComponent<Enemy>();
+        if (enemyScript != null && enemyScript.isBoss)
+        {
+            // Spawn multiple XP orbs for boss
+            for (int i = 0; i < 5; i++)
+            {
+                Vector3 offset = Random.insideUnitCircle * 1f;
+                SpawnXPOrb(enemy.transform.position + offset);
+            }
+            
+            // Notify game manager if all bosses defeated
+            CheckBossCompletion();
         }
     }
-
+    
+    void SpawnXPOrb(Vector3 position)
+    {
+        if (xpOrbPrefab != null)
+        {
+            GameObject orb = Instantiate(xpOrbPrefab, position, Quaternion.identity);
+            
+            // Add slight random force
+            Rigidbody2D rb = orb.GetComponent<Rigidbody2D>();
+            if (rb != null)
+            {
+                Vector2 randomForce = Random.insideUnitCircle * 2f;
+                rb.AddForce(randomForce, ForceMode2D.Impulse);
+            }
+        }
+    }
+    
+    void CheckBossCompletion()
+    {
+        bool bossesRemaining = false;
+        
+        foreach (GameObject enemy in activeEnemies)
+        {
+            if (enemy != null)
+            {
+                Enemy enemyScript = enemy.GetComponent<Enemy>();
+                if (enemyScript != null && enemyScript.isBoss)
+                {
+                    bossesRemaining = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!bossesRemaining && GameManager.Instance != null && GameManager.Instance.IsBossLevel)
+        {
+            // All bosses defeated, complete level
+            GameManager.Instance.CompleteLevel();
+        }
+    }
+    
+    public int GetActiveEnemyCount()
+    {
+        // Clean up null entries
+        activeEnemies.RemoveAll(e => e == null);
+        return activeEnemies.Count;
+    }
+    
+    public void ClearAllEnemies()
+    {
+        foreach (GameObject enemy in activeEnemies)
+        {
+            if (enemy != null)
+            {
+                Destroy(enemy);
+            }
+        }
+        
+        activeEnemies.Clear();
+    }
+    
     void OnDrawGizmosSelected()
     {
-        Gizmos.color = new Color(0.2f, 0.8f, 1f, 0.35f);
-        Gizmos.DrawWireSphere(transform.position, Mathf.Max(0.5f, spawnRadius));
+        Vector3 center = player != null ? player.position : transform.position;
+        
+        // Draw spawn radius
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(center, spawnRadius);
+        
+        // Draw minimum spawn distance
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(center, minSpawnDistance);
     }
 }
