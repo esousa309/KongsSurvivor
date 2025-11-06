@@ -1,0 +1,124 @@
+{
+  "planets": [
+    {
+      "code": "mars",
+      "name": "Mars Colony Alpha",
+      "unlockCostOMEGA": 0,
+      "sublevels": 25
+    },
+    {
+      "code": "ice",
+      "name": "Ice Planet Omega",
+      "unlockCostOMEGA": 500,
+      "sublevels": 25
+    },
+    {
+      "code": "jungle",
+      "name": "Jungle Planet Genesis",
+      "unlockCostOMEGA": 1000,
+      "sublevels": 25
+    },
+    {
+      "code": "desert",
+      "name": "Desert Planet Nexus",
+      "unlockCostOMEGA": 2000,
+      "sublevels": 25
+    },
+    {
+      "code": "volcanic",
+      "name": "Volcanic Planet Inferno",
+      "unlockCostOMEGA": 5000,
+      "sublevels": 25
+    },
+    {
+      "code": "ocean",
+      "name": "Ocean Planet Abyssal",
+      "unlockCostOMEGA": 7500,
+      "sublevels": 25
+    },
+    {
+      "code": "sky",
+      "name": "Sky Planet Stratos",
+      "unlockCostOMEGA": 10000,
+      "sublevels": 25
+    },
+    {
+      "code": "toxic",
+      "name": "Toxic Planet Miasma",
+      "unlockCostOMEGA": 12500,
+      "sublevels": 25
+    },
+    {
+      "code": "storm",
+      "name": "Storm Planet Tempest",
+      "unlockCostOMEGA": 15000,
+      "sublevels": 25
+    },
+    {
+      "code": "crystal",
+      "name": "Crystal Planet Prismara",
+      "unlockCostOMEGA": 20000,
+      "sublevels": 25
+    },
+    {
+      "code": "biomech",
+      "name": "Biomech Planet Synapse",
+      "unlockCostOMEGA": 25000,
+      "sublevels": 25
+    },
+    {
+      "code": "cyber",
+      "name": "Cyber Planet Gridline",
+      "unlockCostOMEGA": 30000,
+      "sublevels": 25
+    },
+    {
+      "code": "gravity",
+      "name": "Gravity Planet Singularity",
+      "unlockCostOMEGA": 40000,
+      "sublevels": 25
+    },
+    {
+      "code": "shadow",
+      "name": "Shadow Planet Umbra",
+      "unlockCostOMEGA": 50000,
+      "sublevels": 25
+    },
+    {
+      "code": "machine",
+      "name": "Machine Planet Forge",
+      "unlockCostOMEGA": 65000,
+      "sublevels": 25
+    },
+    {
+      "code": "fungal",
+      "name": "Fungal Planet Mycelia",
+      "unlockCostOMEGA": 80000,
+      "sublevels": 25
+    },
+    {
+      "code": "time",
+      "name": "Time Planet Chronos",
+      "unlockCostOMEGA": 100000,
+      "sublevels": 25
+    },
+    {
+      "code": "mirror",
+      "name": "Mirror Planet Echo",
+      "unlockCostOMEGA": 125000,
+      "sublevels": 25
+    },
+    {
+      "code": "radioactive",
+      "name": "Radioactive Planet Corex",
+      "unlockCostOMEGA": 150000,
+      "sublevels": 25
+    },
+    {
+      "code": "void",
+      "name": "Void Planet Nullspace",
+      "unlockCostOMEGA": 200000,
+      "sublevels": 25
+    }
+  ]
+}

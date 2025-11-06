@@ -1,0 +1,1 @@
+Patch 17b: End-of-Level reward popup (appears only on level end).
