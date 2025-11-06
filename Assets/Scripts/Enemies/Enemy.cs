@@ -1,89 +1,192 @@
-
-// Assets/Scripts/Enemies/Enemy.cs
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class Enemy : MonoBehaviour
 {
-    [Header("Movement")]
+    [Header("Enemy Settings")]
     public float moveSpeed = 2f;
-
-    [Header("Rewards")]
-    public int xpAmount = 1;
-    public GameObject xpOrbPrefab;
-
-    private Transform player;
+    public float damage = 10f;
+    public float attackRange = 1.5f;
+    public float attackCooldown = 1f;
+    public bool isBoss = false;
+    
+    [Header("Target")]
+    private Transform target;
+    private float lastAttackTime = 0f;
+    
+    [Header("Components")]
+    private Rigidbody2D rb;
     private Health health;
-    private bool hasDied;
-    private bool orbDropped;
-    private static bool suppressGlobalRewards; // used during level cleanup if you want
-
+    private SpriteRenderer spriteRenderer;
+    
     void Awake()
     {
-        health = GetComponent<Health>();
-        if (health == null) health = gameObject.AddComponent<Health>();
-
-        // If an orb was accidentally nested under this enemy in the prefab, purge it.
-        var childOrbs = GetComponentsInChildren<XpOrb>(true);
-        foreach (var c in childOrbs)
+        rb = GetComponent<Rigidbody2D>();
+        if (rb == null)
         {
-            if (c != null && c.gameObject != null) Destroy(c.gameObject);
+            rb = gameObject.AddComponent<Rigidbody2D>();
+            rb.gravityScale = 0f;
+            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+        }
+        
+        health = GetComponent<Health>();
+        if (health == null)
+        {
+            health = gameObject.AddComponent<Health>();
+            health.maxHealth = isBoss ? 500f : 100f;
+            health.current = health.maxHealth;
+        }
+        
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        if (spriteRenderer == null)
+        {
+            spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
+        }
+        
+        // Set tag
+        gameObject.tag = "Enemy";
+        
+        // Scale up if boss
+        if (isBoss)
+        {
+            transform.localScale = Vector3.one * 2f;
+            moveSpeed *= 0.7f; // Bosses move slower
+            damage *= 2f; // But hit harder
         }
     }
-
+    
+    void Start()
+    {
+        // Find player if no target set
+        if (target == null)
+        {
+            GameObject player = GameObject.FindGameObjectWithTag("Player");
+            if (player != null)
+            {
+                target = player.transform;
+            }
+        }
+    }
+    
+    public void SetTarget(Transform newTarget)
+    {
+        target = newTarget;
+    }
+    
     void Update()
     {
-        // If Health.Damage destroys us immediately on 0 HP, Update might never see it.
-        // We still keep this check to catch normal cases.
-        if (!hasDied && health != null && health.current <= 0f)
+        if (target == null) return;
+        
+        // Calculate distance to target
+        float distanceToTarget = Vector2.Distance(transform.position, target.position);
+        
+        // Move towards target if not in attack range
+        if (distanceToTarget > attackRange)
         {
-            hasDied = true;
-            TryDropOrb();
-            Destroy(gameObject);
-            return;
+            MoveTowardsTarget();
         }
-
-        // Chase player (simple survivors-like movement)
-        if (player == null)
+        else
         {
-            var p = GameObject.FindGameObjectWithTag("Player");
-            if (p != null) player = p.transform;
+            // Stop moving and attack
+            rb.velocity = Vector2.zero;
+            
+            if (Time.time >= lastAttackTime + attackCooldown)
+            {
+                Attack();
+                lastAttackTime = Time.time;
+            }
         }
-        if (player == null) return;
-
-        var dir = (player.position - transform.position).normalized;
-        transform.position += dir * (moveSpeed * Time.deltaTime);
+        
+        // Face target
+        if (target.position.x < transform.position.x)
+        {
+            spriteRenderer.flipX = true;
+        }
+        else
+        {
+            spriteRenderer.flipX = false;
+        }
     }
-
-    void OnDestroy()
+    
+    void MoveTowardsTarget()
     {
-        // If destroyed without Update running (e.g., Health immediately calls Destroy),
-        // we still want to drop an orb ONLY if the enemy actually died (HP <= 0).
-        if (!orbDropped && !suppressGlobalRewards && health != null && health.current <= 0f)
-        {
-            TryDropOrb();
-        }
+        if (target == null || rb == null) return;
+        
+        Vector2 direction = (target.position - transform.position).normalized;
+        rb.velocity = direction * moveSpeed;
     }
-
-    private void TryDropOrb()
+    
+    void Attack()
     {
-        if (orbDropped) return;
-        orbDropped = true;
-
-        if (xpOrbPrefab == null)
+        if (target == null) return;
+        
+        // Check if target is still in range
+        float distance = Vector2.Distance(transform.position, target.position);
+        if (distance <= attackRange)
         {
-#if UNITY_EDITOR
-            Debug.LogWarning($"[Enemy] No xpOrbPrefab set on {name}; cannot drop XP.");
-#endif
-            return;
+            // Deal damage to player
+            PlayerHealth playerHealth = target.GetComponent<PlayerHealth>();
+            if (playerHealth != null)
+            {
+                playerHealth.TakeDamage(damage, transform.position);
+            }
+            
+            // Visual feedback
+            StartCoroutine(AttackAnimation());
         }
-        if (xpAmount <= 0) return;
-
-        var orbGO = Instantiate(xpOrbPrefab, transform.position, Quaternion.identity);
-        orbGO.transform.SetParent(null); // ensure not parented under this enemy
-        var xo = orbGO.GetComponent<XpOrb>();
-        if (xo != null) xo.xp = xpAmount;
     }
-
-    // Optional: call this before mass cleanup to avoid reward drops (e.g., at level end)
-    public static void SetSuppressRewards(bool on) { suppressGlobalRewards = on; }
+    
+    IEnumerator AttackAnimation()
+    {
+        // Simple scale punch for attack
+        Vector3 originalScale = transform.localScale;
+        transform.localScale = originalScale * 1.2f;
+        
+        yield return new WaitForSeconds(0.1f);
+        
+        transform.localScale = originalScale;
+    }
+    
+    void OnCollisionEnter2D(Collision2D collision)
+    {
+        // Continuous damage on contact with player
+        if (collision.gameObject.CompareTag("Player"))
+        {
+            PlayerHealth playerHealth = collision.gameObject.GetComponent<PlayerHealth>();
+            if (playerHealth != null && Time.time >= lastAttackTime + attackCooldown)
+            {
+                playerHealth.TakeDamage(damage, transform.position);
+                lastAttackTime = Time.time;
+            }
+        }
+    }
+    
+    void OnCollisionStay2D(Collision2D collision)
+    {
+        // Continuous damage while in contact
+        if (collision.gameObject.CompareTag("Player"))
+        {
+            PlayerHealth playerHealth = collision.gameObject.GetComponent<PlayerHealth>();
+            if (playerHealth != null && Time.time >= lastAttackTime + attackCooldown)
+            {
+                playerHealth.TakeDamage(damage, transform.position);
+                lastAttackTime = Time.time;
+            }
+        }
+    }
+    
+    void OnDrawGizmosSelected()
+    {
+        // Draw attack range
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(transform.position, attackRange);
+        
+        // Draw line to target
+        if (target != null)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawLine(transform.position, target.position);
+        }
+    }
 }
