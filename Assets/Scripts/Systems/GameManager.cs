@@ -4,15 +4,6 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using System;
 
-public enum GameState
-{
-    MainMenu,
-    Playing,
-    Paused,
-    LevelComplete,
-    GameOver
-}
-
 public class GameManager : MonoBehaviour
 {
     private static GameManager instance;
@@ -23,40 +14,50 @@ public class GameManager : MonoBehaviour
             if (instance == null)
             {
                 instance = FindObjectOfType<GameManager>();
-                if (instance == null)
-                {
-                    GameObject go = new GameObject("GameManager");
-                    instance = go.AddComponent<GameManager>();
-                }
             }
             return instance;
         }
     }
     
-    [Header("Game State")]
-    public GameState currentGameState = GameState.MainMenu;
+    [Header("Level Configuration")]
+    public EnemySpawner spawner;
+    public float levelDurationSeconds = 90f;
+    public float nextLevelDelay = 2f;
+    public int initialBurstBase = 5;
+    public bool endNonBossWhenCleared = true;
+    public bool resetOmegaOnFirstLevel = true;
     
-    [Header("Level Information")]
-    public int currentLevelNumber = 1;
-    public int currentPlanetNumber = 1;
-    public bool isEliteBossLevel = false;
-    public bool isPlanetBossLevel = false;
+    [Header("Current Level Info")]
+    public int planetIndex = 0;
+    public int subLevel = 0;
+    public bool isBossLevel = false;
     
-    [Header("Game Settings")]
-    public float gameSpeed = 1.0f;
-    public bool soundEnabled = true;
-    public bool musicEnabled = true;
+    [Header("Rewards")]
+    private int lastOmegaReward = 0;
+    private float timeRemaining;
+    private bool levelComplete = false;
+    private bool gameOver = false;
     
-    [Header("References")]
-    public EndLevelRewardManager endLevelRewardManager;
-    public PlayerDataManager playerDataManager;
-    public LevelManager levelManager;
+    [Header("Player References")]
+    private PlayerHealth playerHealth;
+    private PlayerXP playerXP;
     
-    [Header("Events")]
-    public Action<GameState> OnGameStateChanged;
-    public Action OnLevelStarted;
-    public Action OnLevelCompleted;
+    [Header("UI References")]
+    public GameObject endLevelRewardUI;
+    public GameObject upgradeSelectionUI;
+    
+    // Public Properties for other scripts to access
+    public float TimeRemaining => timeRemaining;
+    public int LastOmegaReward => lastOmegaReward;
+    public int PlanetIndex => planetIndex;
+    public int SubLevel => subLevel;
+    public bool IsBossLevel => isBossLevel;
+    
+    // Events
+    public Action<int> OnOmegaRewardEarned;
+    public Action OnLevelComplete;
     public Action OnGameOver;
+    public Action<List<string>> OnUpgradeChoicesReady;
     
     void Awake()
     {
@@ -67,207 +68,392 @@ public class GameManager : MonoBehaviour
         }
         
         instance = this;
-        DontDestroyOnLoad(gameObject);
-        
-        InitializeManagers();
     }
     
     void Start()
     {
-        // Load saved settings
-        LoadGameSettings();
-    }
-    
-    private void InitializeManagers()
-    {
-        // Find managers if not assigned
-        if (endLevelRewardManager == null)
-            endLevelRewardManager = FindObjectOfType<EndLevelRewardManager>();
+        InitializeLevel();
+        FindReferences();
         
-        if (playerDataManager == null)
-            playerDataManager = PlayerDataManager.Instance;
+        // Start the level timer
+        timeRemaining = levelDurationSeconds;
+        StartCoroutine(LevelTimer());
         
-        if (levelManager == null)
-            levelManager = FindObjectOfType<LevelManager>();
-    }
-    
-    public void SetGameState(GameState newState)
-    {
-        if (currentGameState == newState)
-            return;
-        
-        GameState previousState = currentGameState;
-        currentGameState = newState;
-        
-        switch (newState)
+        // Spawn initial enemies
+        if (spawner != null)
         {
-            case GameState.MainMenu:
-                Time.timeScale = 1f;
-                break;
-                
-            case GameState.Playing:
-                Time.timeScale = gameSpeed;
-                if (previousState == GameState.MainMenu)
+            StartCoroutine(InitialEnemyBurst());
+        }
+    }
+    
+    void InitializeLevel()
+    {
+        // Load saved progress or set defaults
+        if (PlayerPrefs.HasKey("CurrentPlanet"))
+        {
+            planetIndex = PlayerPrefs.GetInt("CurrentPlanet", 0);
+            subLevel = PlayerPrefs.GetInt("CurrentSubLevel", 0);
+        }
+        
+        // Determine if this is a boss level
+        // Every 5th sublevel is Elite Boss, every 25th is Planet Boss
+        isBossLevel = (subLevel > 0 && subLevel % 5 == 0);
+        
+        // Reset Omega coins on first level if configured
+        if (resetOmegaOnFirstLevel && planetIndex == 0 && subLevel == 0)
+        {
+            PlayerPrefs.SetInt("OmegaCoins", 0);
+        }
+    }
+    
+    void FindReferences()
+    {
+        playerHealth = FindObjectOfType<PlayerHealth>();
+        playerXP = FindObjectOfType<PlayerXP>();
+        
+        if (playerHealth != null)
+        {
+            playerHealth.OnDeath += HandlePlayerDeath;
+        }
+    }
+    
+    void Update()
+    {
+        // Update timer
+        if (!levelComplete && !gameOver)
+        {
+            timeRemaining -= Time.deltaTime;
+            
+            if (timeRemaining <= 0)
+            {
+                timeRemaining = 0;
+                CompleteLevel();
+            }
+            
+            // Check if all enemies cleared (for non-boss levels)
+            if (endNonBossWhenCleared && !isBossLevel)
+            {
+                if (spawner != null && spawner.GetActiveEnemyCount() == 0 && timeRemaining < levelDurationSeconds - 5f)
                 {
-                    OnLevelStarted?.Invoke();
+                    CompleteLevel();
                 }
-                break;
-                
-            case GameState.Paused:
-                Time.timeScale = 0f;
-                break;
-                
-            case GameState.LevelComplete:
-                HandleLevelComplete();
-                break;
-                
-            case GameState.GameOver:
-                Time.timeScale = 0f;
-                OnGameOver?.Invoke();
-                break;
-        }
-        
-        OnGameStateChanged?.Invoke(newState);
-    }
-    
-    public void StartGame()
-    {
-        // Load player data
-        if (playerDataManager != null)
-        {
-            currentLevelNumber = playerDataManager.GetCurrentLevel();
-            currentPlanetNumber = playerDataManager.GetCurrentPlanet();
-        }
-        
-        // Determine level type
-        UpdateLevelType();
-        
-        // Start the game
-        SetGameState(GameState.Playing);
-    }
-    
-    public void PauseGame()
-    {
-        if (currentGameState == GameState.Playing)
-        {
-            SetGameState(GameState.Paused);
+            }
         }
     }
     
-    public void ResumeGame()
+    IEnumerator InitialEnemyBurst()
     {
-        if (currentGameState == GameState.Paused)
+        yield return new WaitForSeconds(0.5f);
+        
+        int enemiesToSpawn = initialBurstBase + (subLevel / 5);
+        
+        for (int i = 0; i < enemiesToSpawn; i++)
         {
-            SetGameState(GameState.Playing);
+            if (isBossLevel && i == 0)
+            {
+                spawner.SpawnBoss();
+            }
+            else
+            {
+                spawner.SpawnEnemy();
+            }
+            yield return new WaitForSeconds(0.2f);
+        }
+        
+        // Start regular spawning
+        if (!isBossLevel)
+        {
+            spawner.StartSpawning();
+        }
+    }
+    
+    IEnumerator LevelTimer()
+    {
+        while (timeRemaining > 0 && !levelComplete && !gameOver)
+        {
+            yield return new WaitForSeconds(1f);
         }
     }
     
     public void CompleteLevel()
     {
-        SetGameState(GameState.LevelComplete);
+        if (levelComplete) return;
+        
+        levelComplete = true;
+        
+        // Stop spawning
+        if (spawner != null)
+        {
+            spawner.StopSpawning();
+        }
+        
+        // Calculate rewards
+        CalculateRewards();
+        
+        // Show reward UI
+        ShowEndLevelReward();
+        
+        OnLevelComplete?.Invoke();
+        
+        // Auto-proceed to next level after delay
+        StartCoroutine(NextLevelSequence());
     }
     
-    private void HandleLevelComplete()
+    void CalculateRewards()
     {
+        // Base reward calculation
+        int baseReward = 10 + (subLevel * 5);
+        
+        // Boss level multiplier
+        if (isBossLevel)
+        {
+            baseReward *= 3;
+        }
+        
+        // Time bonus
+        float timeBonus = Mathf.Max(0, timeRemaining / levelDurationSeconds);
+        baseReward = Mathf.RoundToInt(baseReward * (1f + timeBonus));
+        
+        lastOmegaReward = baseReward;
+        
+        // Add to player's total
+        int currentOmega = PlayerPrefs.GetInt("OmegaCoins", 0);
+        PlayerPrefs.SetInt("OmegaCoins", currentOmega + lastOmegaReward);
+        PlayerPrefs.Save();
+        
+        OnOmegaRewardEarned?.Invoke(lastOmegaReward);
+    }
+    
+    void ShowEndLevelReward()
+    {
+        if (endLevelRewardUI != null)
+        {
+            endLevelRewardUI.SetActive(true);
+            // The UI should display LastOmegaReward
+        }
+    }
+    
+    IEnumerator NextLevelSequence()
+    {
+        yield return new WaitForSeconds(nextLevelDelay);
+        
+        // Hide reward UI
+        if (endLevelRewardUI != null)
+        {
+            endLevelRewardUI.SetActive(false);
+        }
+        
+        // Show upgrade selection
+        ShowUpgradeSelection();
+    }
+    
+    void ShowUpgradeSelection()
+    {
+        // Generate upgrade choices
+        List<string> upgradeChoices = GenerateUpgradeChoices();
+        
+        if (upgradeSelectionUI != null)
+        {
+            upgradeSelectionUI.SetActive(true);
+        }
+        
+        OnUpgradeChoicesReady?.Invoke(upgradeChoices);
+    }
+    
+    List<string> GenerateUpgradeChoices()
+    {
+        List<string> choices = new List<string>();
+        
+        // Add 3 random upgrade options
+        string[] possibleUpgrades = {
+            "Increase Damage",
+            "Increase Fire Rate",
+            "Increase Move Speed",
+            "Increase Max Health",
+            "Add Projectile",
+            "Increase Range",
+            "Life Steal",
+            "Explosive Shots"
+        };
+        
+        // Shuffle and pick 3
+        for (int i = 0; i < 3 && i < possibleUpgrades.Length; i++)
+        {
+            int randomIndex = UnityEngine.Random.Range(i, possibleUpgrades.Length);
+            string temp = possibleUpgrades[i];
+            possibleUpgrades[i] = possibleUpgrades[randomIndex];
+            possibleUpgrades[randomIndex] = temp;
+            
+            choices.Add(possibleUpgrades[i]);
+        }
+        
+        return choices;
+    }
+    
+    public void OnUpgradeSelected(string upgradeName)
+    {
+        // Apply the upgrade based on selection
+        ApplyUpgrade(upgradeName);
+        
+        // Hide upgrade UI
+        if (upgradeSelectionUI != null)
+        {
+            upgradeSelectionUI.SetActive(false);
+        }
+        
+        // Proceed to next level
+        LoadNextLevel();
+    }
+    
+    void ApplyUpgrade(string upgradeName)
+    {
+        // Find player components and apply upgrades
+        var playerCombat = FindObjectOfType<PlayerCombat>();
+        var playerMovement = FindObjectOfType<PlayerMovement>();
+        
+        switch (upgradeName)
+        {
+            case "Increase Damage":
+                if (playerCombat != null)
+                    playerCombat.damage += 10;
+                break;
+                
+            case "Increase Fire Rate":
+                if (playerCombat != null)
+                    playerCombat.fireRate *= 1.2f;
+                break;
+                
+            case "Increase Move Speed":
+                if (playerMovement != null)
+                    playerMovement.moveSpeed *= 1.1f;
+                break;
+                
+            case "Increase Max Health":
+                if (playerHealth != null)
+                {
+                    playerHealth.maxHealth += 25;
+                    playerHealth.currentHealth += 25;
+                }
+                break;
+                
+            case "Add Projectile":
+                if (playerCombat != null)
+                    playerCombat.projectileCount++;
+                break;
+                
+            case "Increase Range":
+                if (playerCombat != null)
+                    playerCombat.range *= 1.25f;
+                break;
+                
+            case "Life Steal":
+                if (playerCombat != null)
+                    playerCombat.lifeStealPercent = 0.1f;
+                break;
+                
+            case "Explosive Shots":
+                if (playerCombat != null)
+                    playerCombat.explosiveShots = true;
+                break;
+        }
+        
+        Debug.Log($"Applied upgrade: {upgradeName}");
+    }
+    
+    void LoadNextLevel()
+    {
+        // Increment sublevel
+        subLevel++;
+        
+        // Check if moving to next planet (every 25 levels)
+        if (subLevel >= 25)
+        {
+            planetIndex++;
+            subLevel = 0;
+        }
+        
         // Save progress
-        if (playerDataManager != null)
-        {
-            playerDataManager.SetCurrentLevel(currentLevelNumber + 1);
-        }
+        PlayerPrefs.SetInt("CurrentPlanet", planetIndex);
+        PlayerPrefs.SetInt("CurrentSubLevel", subLevel);
+        PlayerPrefs.Save();
         
-        // Show reward popup
-        if (endLevelRewardManager != null)
-        {
-            endLevelRewardManager.ShowRewardPopup(currentLevelNumber, isEliteBossLevel, isPlanetBossLevel);
-        }
-        
-        OnLevelCompleted?.Invoke();
-    }
-    
-    public void RestartLevel()
-    {
-        Time.timeScale = 1f;
+        // Reload the scene
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
     
-    public void LoadMainMenu()
+    void HandlePlayerDeath()
+    {
+        if (gameOver) return;
+        
+        gameOver = true;
+        
+        // Stop spawning
+        if (spawner != null)
+        {
+            spawner.StopSpawning();
+        }
+        
+        OnGameOver?.Invoke();
+        
+        // Show game over UI and options
+        StartCoroutine(GameOverSequence());
+    }
+    
+    IEnumerator GameOverSequence()
+    {
+        yield return new WaitForSeconds(2f);
+        
+        // Show restart options
+        // For now, just restart
+        RestartRun();
+    }
+    
+    public void RestartRun()
+    {
+        // Reset to first level
+        planetIndex = 0;
+        subLevel = 0;
+        
+        PlayerPrefs.SetInt("CurrentPlanet", 0);
+        PlayerPrefs.SetInt("CurrentSubLevel", 0);
+        
+        if (resetOmegaOnFirstLevel)
+        {
+            PlayerPrefs.SetInt("OmegaCoins", 0);
+        }
+        
+        PlayerPrefs.Save();
+        
+        // Reload scene
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+    }
+    
+    public void ReturnToMainMenu()
     {
         Time.timeScale = 1f;
-        currentGameState = GameState.MainMenu;
         SceneManager.LoadScene("MainMenu");
     }
     
-    private void UpdateLevelType()
+    void OnDestroy()
     {
-        // Every 5th level is an Elite Boss (5, 10, 15, 20, etc.)
-        isEliteBossLevel = (currentLevelNumber % 5 == 0) && (currentLevelNumber % 25 != 0);
-        
-        // Every 25th level is a Planet Boss (25, 50, 75, etc.)
-        isPlanetBossLevel = (currentLevelNumber % 25 == 0);
-        
-        // Update planet number (25 levels per planet)
-        currentPlanetNumber = ((currentLevelNumber - 1) / 25) + 1;
-    }
-    
-    public void SetGameSpeed(float speed)
-    {
-        gameSpeed = Mathf.Clamp(speed, 0.5f, 3f);
-        
-        if (currentGameState == GameState.Playing)
+        if (playerHealth != null)
         {
-            Time.timeScale = gameSpeed;
+            playerHealth.OnDeath -= HandlePlayerDeath;
         }
     }
     
-    public void ToggleSound()
+    // Debug methods
+    [ContextMenu("Complete Level")]
+    void Debug_CompleteLevel()
     {
-        soundEnabled = !soundEnabled;
-        SaveGameSettings();
-        
-        // Update audio sources
-        AudioListener.volume = soundEnabled ? 1f : 0f;
+        CompleteLevel();
     }
     
-    public void ToggleMusic()
+    [ContextMenu("Add Omega Coins")]
+    void Debug_AddOmegaCoins()
     {
-        musicEnabled = !musicEnabled;
-        SaveGameSettings();
-        
-        // Update music sources if you have a music manager
-        // MusicManager.Instance?.SetEnabled(musicEnabled);
-    }
-    
-    private void SaveGameSettings()
-    {
-        PlayerPrefs.SetFloat("GameSpeed", gameSpeed);
-        PlayerPrefs.SetInt("SoundEnabled", soundEnabled ? 1 : 0);
-        PlayerPrefs.SetInt("MusicEnabled", musicEnabled ? 1 : 0);
-        PlayerPrefs.Save();
-    }
-    
-    private void LoadGameSettings()
-    {
-        gameSpeed = PlayerPrefs.GetFloat("GameSpeed", 1.0f);
-        soundEnabled = PlayerPrefs.GetInt("SoundEnabled", 1) == 1;
-        musicEnabled = PlayerPrefs.GetInt("MusicEnabled", 1) == 1;
-        
-        // Apply loaded settings
-        AudioListener.volume = soundEnabled ? 1f : 0f;
-    }
-    
-    void OnApplicationPause(bool pauseStatus)
-    {
-        if (pauseStatus && currentGameState == GameState.Playing)
-        {
-            PauseGame();
-        }
-    }
-    
-    void OnApplicationFocus(bool hasFocus)
-    {
-        if (!hasFocus && currentGameState == GameState.Playing)
-        {
-            PauseGame();
-        }
+        int current = PlayerPrefs.GetInt("OmegaCoins", 0);
+        PlayerPrefs.SetInt("OmegaCoins", current + 100);
+        Debug.Log($"Omega Coins: {current + 100}");
     }
 }
