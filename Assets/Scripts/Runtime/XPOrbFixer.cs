@@ -1,111 +1,50 @@
 using UnityEngine;
 
-public class XPOrbFixer : MonoBehaviour
+/// <summary>
+/// Keeps XP orbs sane while the scene loads / recompiles:
+/// - Avoids referencing missing PlayerLevel-type singletons
+/// - Clamps orb Y to player/ground height to prevent “floating mid-line” bugs
+/// - Works even if the Player is spawned later
+/// </summary>
+[DisallowMultipleComponent]
+public sealed class XPOrbFixer : MonoBehaviour
 {
-    public float attractionSpeed = 8f;
-    public float collectionDistance = 0.5f;
-    public float verticalFloat = 0.5f;
-    public float floatSpeed = 2f;
-    
-    private Transform playerTransform;
-    private bool isBeingCollected = false;
-    private float initialY;
-    
-    void Start()
+    [Tooltip("Optional override. If not set, will look for a GameObject tagged 'Player'.")]
+    [SerializeField] private Transform player;
+
+    [Tooltip("If true, the orb's Y will be matched to the player's Y each frame.")]
+    [SerializeField] private bool matchPlayerY = true;
+
+    [Tooltip("Optional ground Y to clamp to when player is missing.")]
+    [SerializeField] private float fallbackGroundY = 0f;
+
+    void Awake()
     {
-        // Find the player
-        GameObject player = GameObject.FindGameObjectWithTag("Player");
-        if (player != null)
+        // Try to find the player if not wired in the prefab/scene
+        if (!player)
         {
-            playerTransform = player.transform;
+            var pObj = GameObject.FindWithTag("Player");
+            if (pObj) player = pObj.transform;
         }
-        
-        initialY = transform.position.y;
-        
-        // Ensure the orb is 3D
-        Fix3DVisuals();
     }
-    
-    void Fix3DVisuals()
+
+    void LateUpdate()
     {
-        // Remove 2D components
-        SpriteRenderer spriteRenderer = GetComponent<SpriteRenderer>();
-        if (spriteRenderer != null)
-        {
-            DestroyImmediate(spriteRenderer);
-        }
-        
-        // Add 3D mesh
-        MeshFilter meshFilter = GetComponent<MeshFilter>();
-        if (meshFilter == null)
-        {
-            meshFilter = gameObject.AddComponent<MeshFilter>();
-            GameObject tempSphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            meshFilter.mesh = tempSphere.GetComponent<MeshFilter>().mesh;
-            DestroyImmediate(tempSphere);
-        }
-        
-        MeshRenderer meshRenderer = GetComponent<MeshRenderer>();
-        if (meshRenderer == null)
-        {
-            meshRenderer = gameObject.AddComponent<MeshRenderer>();
-            Material orbMaterial = new Material(Shader.Find("Standard"));
-            orbMaterial.color = new Color(0.2f, 0.5f, 1f, 1f); // Blue color
-            orbMaterial.SetFloat("_Metallic", 0.8f);
-            orbMaterial.SetFloat("_Glossiness", 0.9f);
-            
-            // Make it glow
-            orbMaterial.EnableKeyword("_EMISSION");
-            orbMaterial.SetColor("_EmissionColor", new Color(0.2f, 0.5f, 1f) * 1.5f);
-            meshRenderer.material = orbMaterial;
-        }
-        
-        // Set scale
-        transform.localScale = Vector3.one * 0.3f;
-    }
-    
-    void Update()
-    {
-        if (playerTransform == null) return;
-        
-        float distanceToPlayer = Vector3.Distance(transform.position, playerTransform.position);
-        
-        // Start collection when player is close enough
-        if (distanceToPlayer < 3f)
-        {
-            isBeingCollected = true;
-        }
-        
-        if (isBeingCollected)
-        {
-            // Move towards player
-            Vector3 targetPos = playerTransform.position;
-            transform.position = Vector3.MoveTowards(transform.position, targetPos, attractionSpeed * Time.deltaTime);
-            
-            // Check if close enough to collect
-            if (distanceToPlayer < collectionDistance)
-            {
-                CollectOrb();
-            }
-        }
+        // If the only thing this script used to do was consult PlayerLevel,
+        // keep the orb stable on the plane instead of erroring out.
+        if (!matchPlayerY) return;
+
+        var pos = transform.position;
+        if (player)
+            pos.y = player.position.y;      // keep orb on the same height as the player
         else
-        {
-            // Float animation
-            float newY = initialY + Mathf.Sin(Time.time * floatSpeed) * verticalFloat;
-            transform.position = new Vector3(transform.position.x, newY, transform.position.z);
-        }
+            pos.y = fallbackGroundY;        // keep orb on ground until player exists
+
+        transform.position = pos;
     }
-    
-    void CollectOrb()
-    {
-        // Add XP to player
-        PlayerLevel playerLevel = playerTransform.GetComponent<PlayerLevel>();
-        if (playerLevel != null)
-        {
-            playerLevel.AddXP(1);
-        }
-        
-        // Destroy this orb
-        Destroy(gameObject);
-    }
+
+    /// <summary>
+    /// Helper for external spawners to inform the fixer about the player transform.
+    /// </summary>
+    public void SetPlayer(Transform playerTransform) => player = playerTransform;
 }
