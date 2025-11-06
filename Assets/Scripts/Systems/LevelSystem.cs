@@ -1,4 +1,5 @@
 using UnityEngine;
+using PlayerLevel = LevelSystem;
 
 public class LevelSystem : MonoBehaviour
 {
